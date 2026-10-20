@@ -5,7 +5,6 @@ import java.io.FileInputStream
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.google.services)
 }
 
 configure<ApplicationExtension> {
@@ -80,7 +79,5 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.swiperefreshlayout)
 
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.config)
-    implementation(libs.firebase.analytics)
+
 }
