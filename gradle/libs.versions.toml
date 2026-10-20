@@ -5,9 +5,7 @@ versionName = "0.5.0-alpha02"
 coroutines = "1.11.0"
 coreKtx = "1.19.0"
 swipeRefresh = "1.2.0"
-# 👇 Firebase Versions
-googleServices = "4.5.0"
-firebaseBom = "34.15.0"
+
 xposedApi = "82"
 
 # SDK Versions
@@ -25,14 +23,10 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout", name = "swiperefreshlayout", version.ref = "swipeRefresh" }
 
-# 👇 Firebase Libraries
-firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
-firebase-config = { group = "com.google.firebase", name = "firebase-config" }
-firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics" }
+
 xposed-api = { group = "de.robv.android.xposed", name = "api", version.ref = "xposedApi" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-# 👇 Google Services Plugin
-google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+
