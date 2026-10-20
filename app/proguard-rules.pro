@@ -30,5 +30,3 @@
 -keep public class * extends android.app.Activity
 -keep public class * extends android.app.Application
 
-# --- Firebase specific (Optional, R8 usually handles this, but safe to add) ---
--keep class com.google.firebase.** { *; }
