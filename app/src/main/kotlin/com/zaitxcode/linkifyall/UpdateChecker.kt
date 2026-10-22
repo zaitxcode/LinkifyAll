@@ -1,4 +1,4 @@
-package com.mohamedzaitoon.linkifyall
+package com.zaitxcode.linkifyall
 
 import android.content.Context
 import android.content.pm.PackageInfo
@@ -15,12 +15,12 @@ import java.net.URL
 object UpdateChecker {
 
     // --- GitHub Config ---
-    private const val GITHUB_USER = "mohamed-zaitoon"
+    private const val GITHUB_USER = "zaitxcode"
     private const val GITHUB_REPO = "LinkifyAll"
     // API لجلب آخر إصدار (الأحدث زمنياً)
     private const val GITHUB_API_URL = "https://api.github.com/repos/$GITHUB_USER/$GITHUB_REPO/releases?per_page=1"
     private const val DEFAULT_GITHUB_URL = "https://github.com/$GITHUB_USER/$GITHUB_REPO"
-    private const val DEFAULT_WEBSITE_URL = "https://linkifyall.mohamedzaitoon.com"
+    private const val DEFAULT_WEBSITE_URL = "https://zaitxcode.com/linkifyall"
 
     // --- GitHub API Keys (Simulating Remote Config locally or via simple fetch if needed, but here we stick to direct GitHub API for version check) ---
     // Since we removed Firebase, we will rely on GitHub Releases for version info too if possible,

@@ -50,4 +50,4 @@ The module intelligently hooks into `android.widget.TextView`:
 5. Enjoy clickable links everywhere!
 
 ---
-Made with ❤️ by [Mohamed Zaitoon](https://mohamedzaitoon.com)
+Made with ❤️ by [ZaitXCode](https://zaitxcode.com)

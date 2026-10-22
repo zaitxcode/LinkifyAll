@@ -8,11 +8,11 @@ plugins {
 }
 
 configure<ApplicationExtension> {
-    namespace = "com.mohamedzaitoon.linkifyall"
+    namespace = "com.zaitxcode.linkifyall"
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.mohamedzaitoon.linkifyall"
+        applicationId = "com.zaitxcode.linkifyall"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = libs.versions.versionCode.get().toInt()
@@ -63,8 +63,11 @@ configure<ApplicationExtension> {
                 "proguard-rules.pro"
             )
 
-            // 👇 3. استخدام التوقيع الحقيقي هنا بدلاً من debug
-            signingConfig = signingConfigs.getByName("release")
+            // استخدام التوقيع إذا كان ملف المفتاح موجوداً محلياً، حتى يمكن بناء المشروع على GitHub بدون المفتاح
+            val releaseSigning = signingConfigs.getByName("release")
+            if (releaseSigning.storeFile?.exists() == true) {
+                signingConfig = releaseSigning
+            }
         }
     }
 }
@@ -78,6 +81,5 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.swiperefreshlayout)
-
-
+    implementation(libs.androidhelper)
 }

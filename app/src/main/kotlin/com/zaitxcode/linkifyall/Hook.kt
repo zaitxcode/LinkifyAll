@@ -1,9 +1,11 @@
-package com.mohamedzaitoon.linkifyall
+package com.zaitxcode.linkifyall
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import com.zaitxcode.android.browser.Browser
 import android.graphics.Rect
 import android.net.Uri
 import android.text.Spannable
@@ -36,9 +38,9 @@ class Hook : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
 
         // 1. الجزء الجديد: تفعيل الحالة داخل تطبيقنا ليصبح Active ✅
-        if (lpparam.packageName == "com.mohamedzaitoon.linkifyall") {
+        if (lpparam.packageName == "com.zaitxcode.linkifyall") {
             XposedHelpers.findAndHookMethod(
-                "com.mohamedzaitoon.linkifyall.MainActivity",
+                "com.zaitxcode.linkifyall.MainActivity",
                 lpparam.classLoader,
                 "isModuleActive",
                 object : XC_MethodReplacement() {
@@ -257,19 +259,18 @@ class Hook : IXposedHookLoadPackage {
         val finalUrl = normalizeUrl(url)
         if (finalUrl.isBlank()) return
 
-        val uri = Uri.parse(finalUrl)
-        val sourcePackage = view.context.packageName
-        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        // استخدام Browser.openUrl من AndroidHelper لفتح الرابط ببساطة وكفاءة
+        try {
+            Browser.openUrl(finalUrl, view.context)
+        } catch (e: Exception) {
+            XposedBridge.log("Error opening URL via AndroidHelper: $e")
+            // Fallback بسيط في حال فشل المكتبة (نظرياً لا يجب أن يحدث)
+            val uri = Uri.parse(finalUrl)
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            view.context.startActivity(intent)
         }
-
-        val externalIntent = findExternalHandlerIntent(view, intent, sourcePackage)
-        if (externalIntent != null) {
-            view.context.startActivity(externalIntent)
-            return
-        }
-
-        view.context.startActivity(createExternalChooserIntent(view, intent, sourcePackage))
     }
 
     private fun cleanMatchedUrl(url: String): String {

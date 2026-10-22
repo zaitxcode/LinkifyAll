@@ -1,4 +1,4 @@
-package com.mohamedzaitoon.linkifyall
+package com.zaitxcode.linkifyall
 
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -26,13 +26,14 @@ import android.view.View
 import android.widget.*
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import androidx.core.content.FileProvider
+import com.zaitxcode.android.core.AppHelper
+import com.zaitxcode.android.browser.Browser
 import java.io.File
-import com.google.firebase.FirebaseApp // 👈 ضيف دي
 class MainActivity : Activity() {
 
     private companion object {
-        const val DEFAULT_GITHUB_URL = "https://github.com/mohamed-zaitoon/LinkifyAll"
-        const val DEFAULT_WEBSITE_URL = "https://linkifyall.mohamedzaitoon.com"
+        const val DEFAULT_GITHUB_URL = "https://github.com/zaitxcode/LinkifyAll"
+        const val DEFAULT_WEBSITE_URL = "https://zaitxcode.com/linkifyall"
     }
 
     // Default URLs
@@ -67,7 +68,10 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ensureLauncherIconHidden()
-        FirebaseApp.initializeApp(this)
+        
+        // تهيئة AndroidHelper
+        AppHelper.initialize(this)
+        
         // 1. SwipeRefreshLayout
         swipeRefreshLayout = SwipeRefreshLayout(this).apply {
             setColorSchemeColors(Color.parseColor("#2196F3"))
@@ -455,11 +459,11 @@ class MainActivity : Activity() {
         val trimmedUrl = url.trim()
         if (trimmedUrl.isBlank()) return false
 
-        return try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(trimmedUrl)))
-            true
+        try {
+            Browser.openUrl(trimmedUrl, this)
+            return true
         } catch (e: Exception) {
-            false
+            return false
         }
     }
 
