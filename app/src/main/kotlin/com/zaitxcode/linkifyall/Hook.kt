@@ -1,9 +1,6 @@
 package com.zaitxcode.linkifyall
 
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
 import com.zaitxcode.android.browser.Browser
 import android.graphics.Rect
@@ -23,6 +20,64 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.util.regex.Pattern
+
+/**
+ * نظام تسجيل متقدم لـ LinkifyAll مع مستويات قابلة للتكوين
+ * يمكن تفعيل/تعطيل مستويات التسجيل المختلفة للتحكم في كمية السجلات
+ */
+object LogManager {
+    enum class Level(val priority: Int) {
+        NONE(0),
+        ERROR(1),
+        WARN(2),
+        INFO(3),
+        DEBUG(4),
+        VERBOSE(5)
+    }
+
+    // المستوى الحالي - يمكن تعديله من الإعدادات
+    @Volatile
+    var currentLevel: Level = Level.INFO
+
+    // مفتاح مشترك للبحث في السجلات
+    private const val TAG = "LinkifyAll"
+
+    private fun log(level: Level, message: String, throwable: Throwable? = null) {
+        if (level.priority <= currentLevel.priority) {
+            val msg = "[$TAG] [$level] $message"
+            when (level) {
+                Level.ERROR -> XposedBridge.log(msg + (throwable?.let { "\n$it" } ?: ""))
+                Level.WARN -> XposedBridge.log(msg)
+                Level.INFO -> XposedBridge.log(msg)
+                Level.DEBUG -> XposedBridge.log(msg)
+                Level.VERBOSE -> XposedBridge.log(msg)
+                else -> {}
+            }
+            if (throwable != null && level != Level.ERROR) {
+                XposedBridge.log(throwable)
+            }
+        }
+    }
+
+    fun error(message: String, throwable: Throwable? = null) = log(Level.ERROR, message, throwable)
+    fun warn(message: String) = log(Level.WARN, message)
+    fun info(message: String) = log(Level.INFO, message)
+    fun debug(message: String) = log(Level.DEBUG, message)
+    fun verbose(message: String) = log(Level.VERBOSE, message)
+
+    /**
+     * تعيين مستوى التسجيل من قيمة نصية (للإعدادات)
+     */
+    fun setLevelFromString(levelStr: String) {
+        currentLevel = Level.values().firstOrNull { it.name.equals(levelStr, ignoreCase = true) }
+            ?: Level.INFO
+    }
+
+    /**
+     * الحصول على اسم المستوى الحالي
+     */
+    fun getCurrentLevelName(): String = currentLevel.name
+}
 
 class Hook : IXposedHookLoadPackage {
 
@@ -91,7 +146,10 @@ class Hook : IXposedHookLoadPackage {
                                 param.args[1] = TextView.BufferType.SPANNABLE
                             }
                         }
-                    } catch (e: Throwable) { }
+                    } catch (e: Throwable) {
+                        // Log errors in setText hook for debugging instead of silently swallowing
+                        XposedBridge.log("LinkifyAll setText error: ${e.message}")
+                    }
                 }
             }
         )
@@ -259,18 +317,50 @@ class Hook : IXposedHookLoadPackage {
         val finalUrl = normalizeUrl(url)
         if (finalUrl.isBlank()) return
 
+        // Security: Validate URL scheme to prevent Intent redirection attacks
+        if (!isSafeScheme(finalUrl)) {
+            XposedBridge.log("LinkifyAll: Blocked unsafe URL scheme: $finalUrl")
+            return
+        }
+
         // استخدام Browser.openUrl من AndroidHelper لفتح الرابط ببساطة وكفاءة
         try {
             Browser.openUrl(finalUrl, view.context)
         } catch (e: Exception) {
             XposedBridge.log("Error opening URL via AndroidHelper: $e")
-            // Fallback بسيط في حال فشل المكتبة (نظرياً لا يجب أن يحدث)
-            val uri = Uri.parse(finalUrl)
-            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // Fallback آمن مع التحقق من الـ Intent
+            try {
+                val uri = Uri.parse(finalUrl)
+                // منع فتح روابط file:// أو content:// عبر الـ fallback
+                val scheme = uri.scheme?.lowercase()
+                if (scheme == "file" || scheme == "content") {
+                    XposedBridge.log("LinkifyAll: Blocked file/content URI in fallback")
+                    return
+                }
+                val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                // التحقق من وجود تطبيق يمكنه معالجة الـ Intent قبل إرساله
+                if (intent.resolveActivity(view.context.packageManager) != null) {
+                    view.context.startActivity(intent)
+                }
+            } catch (e2: Exception) {
+                XposedBridge.log("LinkifyAll: Fallback failed: $e2")
             }
-            view.context.startActivity(intent)
         }
+    }
+
+    /**
+     * التحقق من أن مخطط الرابط آمن لمنع هجمات Intent Redirection
+     */
+    private fun isSafeScheme(url: String): Boolean {
+        val safeSchemes = listOf(
+            "http://", "https://",
+            "mailto:", "tel:", "sms:",
+            "geo:", "magnet:?"
+        )
+        val lowerUrl = url.lowercase()
+        return safeSchemes.any { lowerUrl.startsWith(it) }
     }
 
     private fun cleanMatchedUrl(url: String): String {
@@ -291,61 +381,19 @@ class Hook : IXposedHookLoadPackage {
     private fun normalizeUrl(url: String): String {
         val cleaned = cleanMatchedUrl(url)
         if (cleaned.isBlank()) return ""
+
+        // Security: Block javascript:, data:, and other dangerous schemes
+        val lowerCleaned = cleaned.lowercase()
+        if (lowerCleaned.startsWith("javascript:") ||
+            lowerCleaned.startsWith("data:") ||
+            lowerCleaned.startsWith("vbscript:")) {
+            return ""
+        }
+
         if (uriSchemePattern.matcher(cleaned).find()) return cleaned
 
         val prefix = if (ipv4Pattern.matcher(cleaned).matches()) "http://" else "https://"
         return prefix + cleaned
     }
 
-    private fun findExternalHandlerIntent(view: View, baseIntent: Intent, sourcePackage: String): Intent? {
-        val packageManager = view.context.packageManager
-        val handlers = try {
-            packageManager.queryIntentActivities(baseIntent, PackageManager.MATCH_DEFAULT_ONLY)
-        } catch (_: Throwable) {
-            return null
-        }
-
-        val externalHandlers = handlers.filter { it.activityInfo?.packageName != sourcePackage }
-        val preferred = externalHandlers.firstOrNull { info ->
-            val packageName = info.activityInfo?.packageName ?: return@firstOrNull false
-            packageName.contains("chrome", ignoreCase = true) ||
-                packageName.contains("browser", ignoreCase = true) ||
-                packageName.contains("firefox", ignoreCase = true) ||
-                packageName.contains("edge", ignoreCase = true) ||
-                packageName.contains("brave", ignoreCase = true) ||
-                packageName.contains("opera", ignoreCase = true) ||
-                packageName.contains("duckduckgo", ignoreCase = true)
-        } ?: externalHandlers.firstOrNull()
-
-        val activityInfo = preferred?.activityInfo ?: return null
-        return Intent(baseIntent).apply {
-            component = ComponentName(activityInfo.packageName, activityInfo.name)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-    }
-
-    private fun createExternalChooserIntent(view: View, baseIntent: Intent, sourcePackage: String): Intent {
-        val packageManager = view.context.packageManager
-        val excludedComponents = try {
-            packageManager.queryIntentActivities(baseIntent, PackageManager.MATCH_DEFAULT_ONLY)
-                .mapNotNull { info ->
-                    val activityInfo = info.activityInfo ?: return@mapNotNull null
-                    if (activityInfo.packageName == sourcePackage) {
-                        ComponentName(activityInfo.packageName, activityInfo.name)
-                    } else {
-                        null
-                    }
-                }
-                .toTypedArray()
-        } catch (_: Throwable) {
-            emptyArray()
-        }
-
-        return Intent.createChooser(baseIntent, "Open link").apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            if (excludedComponents.isNotEmpty()) {
-                putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, excludedComponents)
-            }
-        }
-    }
 }

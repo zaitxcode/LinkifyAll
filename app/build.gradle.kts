@@ -19,7 +19,7 @@ configure<ApplicationExtension> {
         versionName = libs.versions.versionName.get()
     }
 
-    // 👇 1. تحميل ملف إعدادات التوقيع
+    // 👇 1. تحميلملف إعدادات التوقيع
     val keystorePropertiesFile = listOf(
         rootProject.file("keystore.properties"),
         rootProject.file("key.properties")
@@ -32,7 +32,6 @@ configure<ApplicationExtension> {
     // 👇 2. إعداد التوقيع (Signing Config)
     signingConfigs {
         create("release") {
-            // Support both camelCase and snake_case keys so local files stay flexible
             val alias = (keystoreProperties["keyAlias"] ?: keystoreProperties["key_alias"]) as String?
             val keyPass = (keystoreProperties["keyPassword"] ?: keystoreProperties["key_password"]) as String?
             val storePath = (keystoreProperties["storeFile"] ?: keystoreProperties["store_file"]) as String?
@@ -40,7 +39,7 @@ configure<ApplicationExtension> {
 
             keyAlias = alias
             keyPassword = keyPass
-            storeFile = storePath?.let { file(it) }
+            storeFile = storePath?.let { rootProject.file(it) }
             storePassword = storePass
         }
     }
@@ -63,8 +62,8 @@ configure<ApplicationExtension> {
                 "proguard-rules.pro"
             )
 
-            // استخدام التوقيع إذا كان ملف المفتاح موجوداً محلياً، حتى يمكن بناء المشروع على GitHub بدون المفتاح
             val releaseSigning = signingConfigs.getByName("release")
+            println("DEBUG: storeFile=${releaseSigning.storeFile} exists=${releaseSigning.storeFile?.exists()} alias=${releaseSigning.keyAlias}")
             if (releaseSigning.storeFile?.exists() == true) {
                 signingConfig = releaseSigning
             }

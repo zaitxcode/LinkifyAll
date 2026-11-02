@@ -9,6 +9,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.graphics.Color
@@ -26,10 +27,14 @@ import android.view.View
 import android.widget.*
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.Job
 import com.zaitxcode.android.core.AppHelper
 import com.zaitxcode.android.browser.Browser
 import java.io.File
 class MainActivity : Activity() {
+
+    // Job لإدارة دورة حياة الكوروتين - يتم إلغاءه عند إغلاق النشاط
+    private val lifecycleJob = Job()
 
     private companion object {
         const val DEFAULT_GITHUB_URL = "https://github.com/zaitxcode/LinkifyAll"
@@ -183,6 +188,63 @@ class MainActivity : Activity() {
 
         cardLayout.addView(linksLayout)
 
+        // --- Settings Section ---
+        val settingsTitle = TextView(this).apply {
+            text = "⚙️ Settings"
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#1A1A1A"))
+            gravity = Gravity.CENTER
+            setPadding(0, 30, 0, 20)
+        }
+        cardLayout.addView(settingsTitle)
+
+        val settingsLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(20, 0, 20, 0)
+        }
+
+        // Create SettingsUIHelpers instance
+        val settingsUI = SettingsUIHelpers(this)
+
+        // Link Color Setting
+        val colorSetting = settingsUI.createColorSetting()
+        settingsLayout.addView(colorSetting)
+
+        // Highlight Links Toggle
+        val highlightSetting = settingsUI.createToggleSetting(
+            "Highlight Links",
+            "Enable link highlighting in text",
+            SettingsManager.getHighlightLinks(this),
+            { enabled -> SettingsManager.setHighlightLinks(this, enabled) }
+        )
+        settingsLayout.addView(highlightSetting)
+
+        // Custom View Support Toggle
+        val customViewSetting = settingsUI.createToggleSetting(
+            "Custom View Support",
+            "Enable link detection in custom views (accessibility)",
+            SettingsManager.getCustomViewSupport(this),
+            { enabled -> SettingsManager.setCustomViewSupport(this, enabled) }
+        )
+        settingsLayout.addView(customViewSetting)
+
+        // Open in External Browser Toggle
+        val browserSetting = settingsUI.createToggleSetting(
+            "Open in External Browser",
+            "Open links in external browser instead of in-app handler",
+            SettingsManager.getOpenInExternalBrowser(this),
+            { enabled -> SettingsManager.setOpenInExternalBrowser(this, enabled) }
+        )
+        settingsLayout.addView(browserSetting)
+
+        // Log Level Setting
+        val logLevelSetting = settingsUI.createLogLevelSetting()
+        settingsLayout.addView(logLevelSetting)
+
+        cardLayout.addView(settingsLayout)
+
         val devInfo = TextView(this).apply {
             text = "© Mohamed Zaitoon"
             textSize = 12f
@@ -222,7 +284,8 @@ class MainActivity : Activity() {
             updateButton.text = "Checking..."
             updateButton.isEnabled = false
         }
-        UpdateChecker.checkForUpdate(this, object : UpdateChecker.UpdateListener {
+        // تمرير lifecycleJob لربط دورة حياة الكوروتين بنشاط المستخدم
+        UpdateChecker.checkForUpdate(this, lifecycleJob, object : UpdateChecker.UpdateListener {
             override fun onConfigFetched(result: UpdateChecker.ConfigResult) {
                 swipeRefreshLayout.isRefreshing = false
 
@@ -423,8 +486,28 @@ class MainActivity : Activity() {
         installStandard(downloadId)
     }
 
+    /**
+     * تثبيت APK باستخدام صلاحيات Root
+     * يتحقق من سلامة الملف ومساره قبل التثبيت لمنع Path Traversal
+     * @param path المسار المطلق لملف APK
+     * @return true إذا نجح التثبيت
+     */
     private fun installWithRoot(path: String): Boolean {
-        return runWithRoot("pm install -r \"$path\"")
+        // Validate file path to prevent path traversal
+        val file = File(path)
+        if (!file.exists() || !file.canRead()) {
+            return false
+        }
+        
+        // Ensure file is within expected directory
+        val expectedDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        if (expectedDir != null && !file.canonicalPath.startsWith(expectedDir.canonicalPath)) {
+            return false
+        }
+        
+        // Sanitize path: use canonical path to prevent traversal
+        val safePath = file.canonicalPath
+        return runWithRoot("pm install -r \"$safePath\"")
     }
 
     private fun installStandard(downloadId: Long) {
@@ -451,6 +534,8 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // إلغاء جميع العمليات المرتبطة بدورة حياة النشاط
+        lifecycleJob.cancel()
         isDownloading = false
         try { unregisterReceiver(onDownloadComplete) } catch (e: Exception) {}
     }
@@ -467,6 +552,12 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * تنظيف اسم الملف ليكون آمناً للاستخدام في مسارات الملفات
+     * يستبدل الأحرف الخطرة بـ underscore ويقتصر الطول على 80 حرفاً
+     * @param value الاسم الخام (مثلاً اسم الإصدار)
+     * @return اسم ملف آمن
+     */
     private fun safeFilePart(value: String): String {
         return value.trim()
             .ifBlank { "update" }
@@ -488,15 +579,56 @@ class MainActivity : Activity() {
         return runWithRoot("id")
     }
 
+    /**
+     * تنفيذ أمر مع صلاحيات Root باستخدام su (Magisk/KernelSU)
+     * يستخدم ProcessBuilder بدلاً من Runtime.exec() لأمان أفضل
+     * يتحقق من صحة الأمر عبر isValidRootCommand() لمنع حقن الأوامر
+     * يحدد مهلة 5 ثوانٍ لمنع التعليق
+     * @param command الأمر المراد تنفيذه (مثل: "id" أو "pm install -r ...")
+     * @return true إذا نجح تنفيذ الأمر وخرج برمز 0
+     */
     private fun runWithRoot(command: String): Boolean {
+        // Validate command to prevent injection attacks
+        if (!isValidRootCommand(command)) {
+            return false
+        }
+        
         for (suPath in suCandidates) {
             try {
-                val process = Runtime.getRuntime().exec(arrayOf(suPath, "-c", command))
-                if (process.waitFor() == 0) return true
+                // Use ProcessBuilder for safer command execution
+                val processBuilder = ProcessBuilder(suPath, "-c", command)
+                processBuilder.redirectErrorStream(true)
+                val process = processBuilder.start()
+                
+                // Set timeout to prevent hanging
+                val completed = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+                if (completed && process.exitValue() == 0) {
+                    return true
+                }
+                
+                // Destroy process if still running
+                if (process.isAlive) {
+                    process.destroyForcibly()
+                }
             } catch (_: Exception) {
+                // Silently fail and try next su path
             }
         }
         return false
+    }
+    
+    private fun isValidRootCommand(command: String): Boolean {
+        // Whitelist of allowed commands
+        val allowedCommands = listOf("id", "pm install -r")
+        
+        // Check if command starts with allowed prefix
+        val isAllowed = allowedCommands.any { command.trim().startsWith(it) }
+        
+        // Additional validation: no shell metacharacters for injection
+        val dangerousChars = listOf(";", "|", "&", "$", "`", ">", "<", "\n", "\r")
+        val hasDangerousChars = dangerousChars.any { command.contains(it) }
+        
+        return isAllowed && !hasDangerousChars
     }
 
     private fun isModuleActive(): Boolean = false

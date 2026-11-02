@@ -5,12 +5,15 @@ import android.content.pm.PackageInfo
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
-import java.net.HttpURLConnection
 import java.net.URL
+import javax.net.ssl.HttpsURLConnection
 
 object UpdateChecker {
 
@@ -21,12 +24,6 @@ object UpdateChecker {
     private const val GITHUB_API_URL = "https://api.github.com/repos/$GITHUB_USER/$GITHUB_REPO/releases?per_page=1"
     private const val DEFAULT_GITHUB_URL = "https://github.com/$GITHUB_USER/$GITHUB_REPO"
     private const val DEFAULT_WEBSITE_URL = "https://zaitxcode.com/linkifyall"
-
-    // --- GitHub API Keys (Simulating Remote Config locally or via simple fetch if needed, but here we stick to direct GitHub API for version check) ---
-    // Since we removed Firebase, we will rely on GitHub Releases for version info too if possible,
-    // or keep a local constant for now. For a robust solution without backend, checking GitHub releases for tag name is best.
-    // However, GitHub API returns tag name (e.g., v0.5.0). We need to parse it.
-    // To keep it simple and robust without Firebase: We will check the latest release tag from GitHub API.
 
     data class ConfigResult(
         val githubUrl: String,
@@ -42,19 +39,45 @@ object UpdateChecker {
         fun onError(error: String)
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // النطاق يستخدم Job قابل للإلغاء بواسطة المتصل
+    private var currentJob: Job? = null
 
-    fun checkForUpdate(context: Context, listener: UpdateListener) {
+    private fun createScope(): CoroutineScope {
+        val job = Job()
+        currentJob = job
+        return CoroutineScope(SupervisorJob() + Dispatchers.IO + job)
+    }
+
+    /**
+     * تحقق من وجود تحديث جديد.
+     * @param context السياق
+     * @param listener مستمع نتائج الفحص
+     * @param parentJob Job الخاص بمدير النشاط، يُلغي العملية عند إغلاقه
+     */
+    fun checkForUpdate(context: Context, parentJob: Job, listener: UpdateListener) {
+        // إلغاء العملية السابقة إن وجدت
+        currentJob?.cancel()
+        
+        val scope = if (parentJob != null) {
+            CoroutineScope(SupervisorJob(parentJob) + Dispatchers.IO)
+        } else {
+            createScope()
+        }
+        
         scope.launch {
+            // التحقق من إلغاء العملية بانتظام
+            if (!this.isActive) {
+                withContext(Dispatchers.Main) { listener.onError("Update check cancelled") }
+                return@launch
+            }
             try {
-                val currentCode = getAppVersionCode(context)
-                
-                // Fetch latest release from GitHub
+                // Fetch latest release from GitHub (HTTPS only)
                 val url = URL(GITHUB_API_URL)
-                val connection = url.openConnection() as HttpURLConnection
+                val connection = url.openConnection() as HttpsURLConnection
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 5000
                 connection.readTimeout = 5000
+                connection.instanceFollowRedirects = false // منع إعادة التوجيه لتجنب SSRF
                 connection.setRequestProperty("User-Agent", "LinkifyAll-App")
                 connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
 
@@ -70,29 +93,21 @@ object UpdateChecker {
                         // Parse version from tag (remove 'v' prefix if present)
                         val cleanTagName = tagName.replaceFirst("^v", "", ignoreCase = true)
                         
-                        // Note: Comparing string versions is not ideal, but without a backend to provide integer versionCode,
-                        // we rely on tag name. For robust comparison, one might need to parse semver or rely on a separate version file.
-                        // Here we assume the user checks visually or we try to parse if possible. 
-                        // To keep it simple and working like before: we will just check if tag name differs from current versionName?
-                        // Or better: Just provide the info and let the user decide, OR try to parse versionCode if stored in release assets/meta.
-                        
-                        // Since we removed Firebase Remote Config which held the integer versionCode,
-                        // we can't do a strict integer comparison easily unless we parse the tag or have a convention.
-                        // Let's assume the tag name matches versionName. 
-                        // To maintain "Update Available" logic, we might need to fetch a version code from somewhere.
-                        // Alternative: Use GitHub Releases API to get the latest tag, and compare with current versionName.
-                        
                         val latestVersionName = cleanTagName
                         val currentVersionName = getAppVersionName(context)
                         
-                        val updateAvailable = latestVersionName != currentVersionName
+                        val updateAvailable = isNewerVersion(latestVersionName, currentVersionName)
                         
                         var apkUrl = ""
                         val assets = latestRelease.getJSONArray("assets")
                         for (i in 0 until assets.length()) {
                             val asset = assets.getJSONObject(i)
                             if (asset.getString("name").endsWith(".apk")) {
-                                apkUrl = asset.getString("browser_download_url")
+                                val rawUrl = asset.getString("browser_download_url")
+                                // Security: Validate download URL to prevent SSRF
+                                if (isSafeGitHubUrl(rawUrl)) {
+                                    apkUrl = rawUrl
+                                }
                                 break
                             }
                         }
@@ -126,6 +141,11 @@ object UpdateChecker {
         }
     }
     
+    /**
+     * الحصول على اسم إصدار التطبيق الحالي
+     * @param context سياق التطبيق
+     * @return رقم الإصدار أو نص فارغ في حالة الخطأ
+     */
     private fun getAppVersionName(context: Context): String {
         return try {
             val pInfo: PackageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
@@ -135,63 +155,70 @@ object UpdateChecker {
         }
     }
 
-    // دالة لجلب رابط الـ APK من GitHub API
-    private fun fetchDynamicUrlFromGitHub(callback: (String?, String?) -> Unit) {
-        scope.launch {
-            try {
-                val url = URL(GITHUB_API_URL)
-                val connection = url.openConnection() as HttpURLConnection
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 5000
-                connection.readTimeout = 5000
+    /**
+     * خوارزمية مقارنة إصدارات دلالية (Semantic Versioning)
+     * تدعم الإصدارات مثل: 1.0.0, 1.0.0-beta, 1.0.0-rc.1, 1.0.0-alpha.2
+     * الترتيب: alpha < beta < rc < final (بدون لاحقة)
+     * @param remote الإصدار البعيد (من GitHub)
+     * @param current الإصدار الحالي (المثبت)
+     * @return true إذا كان الإصدار البعيد أحدث
+     */
+    private fun isNewerVersion(remote: String, current: String): Boolean {
+        val preReleaseOrder = mapOf("alpha" to 0, "beta" to 1, "rc" to 2, "" to 3)
 
-                // Headers لتجنب الحظر
-                connection.setRequestProperty("User-Agent", "LinkifyAll-App")
-                connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+        fun parse(v: String): Pair<List<Int>, Pair<Int, Int>> {
+            val cleaned = v.trim().replaceFirst(Regex("^[vV]"), "")
+            val dashIdx = cleaned.indexOf('-')
+            val baseStr = if (dashIdx >= 0) cleaned.substring(0, dashIdx) else cleaned
+            val preStr = if (dashIdx >= 0) cleaned.substring(dashIdx + 1) else ""
 
-                try {
-                    if (connection.responseCode == 200) {
-                        val response = connection.inputStream.bufferedReader().use { it.readText() }
-                        val releases = JSONArray(response)
+            val base = baseStr.split(".").map { it.toIntOrNull() ?: 0 }
 
-                        if (releases.length() > 0) {
-                            val latestJson = releases.getJSONObject(0)
-                            val assets = latestJson.getJSONArray("assets")
+            val preMatch = Regex("^([a-zA-Z]+)(\\d*)$").find(preStr)
+            val preType = preMatch?.groupValues?.get(1)?.lowercase() ?: ""
+            val preNum = preMatch?.groupValues?.get(2)?.toIntOrNull() ?: 0
+            val preRank = preReleaseOrder[preType] ?: 3
 
-                            var apkUrl = ""
-                            // البحث عن أول ملف ينتهي بـ .apk
-                            for (i in 0 until assets.length()) {
-                                val asset = assets.getJSONObject(i)
-                                if (asset.getString("name").endsWith(".apk")) {
-                                    apkUrl = asset.getString("browser_download_url")
-                                    break
-                                }
-                            }
-
-                            // العودة بالنتيجة للـ Main Thread
-                            withContext(Dispatchers.Main) {
-                                if (apkUrl.isNotEmpty()) callback(apkUrl, null)
-                                else callback(null, "No APK found in release")
-                            }
-                        } else {
-                            withContext(Dispatchers.Main) { callback(null, "No releases found") }
-                        }
-                    } else {
-                        withContext(Dispatchers.Main) { callback(null, "GitHub Error: ${connection.responseCode}") }
-                    }
-                } finally {
-                    connection.disconnect()
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { callback(null, e.message) }
-            }
+            return Pair(base, Pair(preRank, preNum))
         }
+
+        val (rBase, rPre) = parse(remote)
+        val (cBase, cPre) = parse(current)
+
+        val len = maxOf(rBase.size, cBase.size)
+        for (i in 0 until len) {
+            val rv = rBase.getOrElse(i) { 0 }
+            val cv = cBase.getOrElse(i) { 0 }
+            if (rv != cv) return rv > cv
+        }
+
+        if (rPre.first != cPre.first) return rPre.first > cPre.first
+        return rPre.second > cPre.second
     }
 
-    private fun getAppVersionCode(context: Context): Long {
+    /**
+     * التحقق من أن الرابط ينتمي لنطاقات GitHub الموثوقة فقط
+     * يمنع هجمات SSRF عبر روابط تنزيل مزيفة في releases
+     */
+    private fun isSafeGitHubUrl(url: String): Boolean {
         return try {
-            val pInfo: PackageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            pInfo.longVersionCode
-        } catch (e: Exception) { -1L }
+            val parsed = URL(url)
+            val host = parsed.host?.lowercase() ?: return false
+            val protocol = parsed.protocol?.lowercase() ?: return false
+
+            // السماح فقط بـ HTTPS
+            if (protocol != "https") return false
+
+            // نطاقات GitHub المسموحة فقط
+            val allowedHosts = listOf(
+                "github.com",
+                "objects.githubusercontent.com",
+                "api.github.com",
+                "raw.githubusercontent.com"
+            )
+            allowedHosts.any { host == it || host.endsWith(".$it") }
+        } catch (_: Exception) {
+            false
+        }
     }
 }

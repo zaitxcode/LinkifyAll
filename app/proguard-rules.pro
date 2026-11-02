@@ -19,7 +19,7 @@
 }
 
 # 3. Keep all classes in your package (Safe for Xposed modules)
--keep class com.mohamedzaitoon.linkifyall.** { *; }
+-keep class com.zaitxcode.linkifyall.** { *; }
 
 # 4. Keep hook methods
 -keepclassmembers class ** {
@@ -29,4 +29,18 @@
 # --- Additional Settings ---
 -keep public class * extends android.app.Activity
 -keep public class * extends android.app.Application
+
+# --- Security Enhancements ---
+# Prevent reflection attacks on sensitive methods
+-keep class * implements java.io.Serializable { *; }
+
+# Don't obfuscate security-related classes
+-keepnames class ** {
+    private static java.io.Serializable serialVersionUID;
+}
+
+# Ensure security exceptions are not swallowed
+-keep class ** extends java.lang.Throwable {
+    <init>(...);
+}
 

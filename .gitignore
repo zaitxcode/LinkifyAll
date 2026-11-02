@@ -89,7 +89,15 @@ version.properties
 *.jar
 # Keep Gradle wrapper JAR tracked
 !gradle/wrapper/gradle-wrapper.jar
-# Local signing keys
-/keystore.properties
-/key.properties
+# Local signing keys (CRITICAL: Never commit these)
+keystore.properties
+key.properties
+*.jks
+*.keystore
+release.jks
 /app/*.jks
+/app/release.jks
+
+# Sensitive local configuration
+local.properties
+*.log
